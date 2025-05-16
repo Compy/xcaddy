@@ -81,11 +81,11 @@ func (b Builder) newEnvironment(ctx context.Context) (*environment, error) {
 			}
 		}
 	}()
-	log.Printf("[INFO] Temporary folder: %s", tempFolder)
+	b.logger.Printf("[INFO] Temporary folder: %s", tempFolder)
 
 	// write the main module file to temporary folder
 	mainPath := filepath.Join(tempFolder, "main.go")
-	log.Printf("[INFO] Writing main module: %s\n%s", mainPath, buf.Bytes())
+	b.logger.Printf("[INFO] Writing main module: %s\n%s", mainPath, buf.Bytes())
 	err = os.WriteFile(mainPath, buf.Bytes(), 0o644)
 	if err != nil {
 		return nil, err
@@ -101,7 +101,7 @@ func (b Builder) newEnvironment(ctx context.Context) (*environment, error) {
 			if err != nil {
 				return nil, fmt.Errorf("embed directory does not exist: %s", d.Dir)
 			}
-			log.Printf("[INFO] Embedding directory: %s", d.Dir)
+			b.logger.Printf("[INFO] Embedding directory: %s", d.Dir)
 			buf.Reset()
 			tpl, err = template.New("embed").Parse(embeddedModuleTemplate)
 			if err != nil {
@@ -111,7 +111,7 @@ func (b Builder) newEnvironment(ctx context.Context) (*environment, error) {
 			if err != nil {
 				return nil, err
 			}
-			log.Printf("[INFO] Writing 'embedded' module: %s\n%s", mainPath, buf.Bytes())
+			b.logger.Printf("[INFO] Writing 'embedded' module: %s\n%s", mainPath, buf.Bytes())
 			emedPath := filepath.Join(tempFolder, "embed.go")
 			err = os.WriteFile(emedPath, buf.Bytes(), 0o644)
 			if err != nil {
@@ -129,10 +129,11 @@ func (b Builder) newEnvironment(ctx context.Context) (*environment, error) {
 		skipCleanup:     b.SkipCleanup,
 		buildFlags:      b.BuildFlags,
 		modFlags:        b.ModFlags,
+		logger:          b.logger,
 	}
 
 	// initialize the go module
-	log.Println("[INFO] Initializing Go module")
+	b.logger.Println("[INFO] Initializing Go module")
 	cmd := env.newGoModCommand(ctx, "init")
 	cmd.Args = append(cmd.Args, "caddy")
 	err = env.runCommand(ctx, cmd)
@@ -143,7 +144,7 @@ func (b Builder) newEnvironment(ctx context.Context) (*environment, error) {
 	// specify module replacements before pinning versions
 	replaced := make(map[string]string)
 	for _, r := range b.Replacements {
-		log.Printf("[INFO] Replace %s => %s", r.Old.String(), r.New.String())
+		b.logger.Printf("[INFO] Replace %s => %s", r.Old.String(), r.New.String())
 		replaced[r.Old.String()] = r.New.String()
 	}
 	if len(replaced) > 0 {
@@ -173,7 +174,7 @@ func (b Builder) newEnvironment(ctx context.Context) (*environment, error) {
 	}
 
 	// pin versions by populating go.mod, first for Caddy itself and then plugins
-	log.Println("[INFO] Pinning versions")
+	b.logger.Println("[INFO] Pinning versions")
 	err = env.execGoGet(ctx, caddyModulePath, env.caddyVersion, "", "")
 	if err != nil {
 		return nil, err
@@ -232,7 +233,7 @@ nextPlugin:
 		return nil, err
 	}
 
-	log.Println("[INFO] Build environment ready")
+	b.logger.Println("[INFO] Build environment ready")
 	return env, nil
 }
 
@@ -245,24 +246,25 @@ type environment struct {
 	skipCleanup     bool
 	buildFlags      string
 	modFlags        string
+	logger          *log.Logger
 }
 
 // Close cleans up the build environment, including deleting
 // the temporary folder from the disk.
 func (env environment) Close() error {
 	if env.skipCleanup {
-		log.Printf("[INFO] Skipping cleanup as requested; leaving folder intact: %s", env.tempFolder)
+		env.logger.Printf("[INFO] Skipping cleanup as requested; leaving folder intact: %s", env.tempFolder)
 		return nil
 	}
-	log.Printf("[INFO] Cleaning up temporary folder: %s", env.tempFolder)
+	env.logger.Printf("[INFO] Cleaning up temporary folder: %s", env.tempFolder)
 	return os.RemoveAll(env.tempFolder)
 }
 
 func (env environment) newCommand(ctx context.Context, command string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = env.tempFolder
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = env.logger.Writer()
+	cmd.Stderr = env.logger.Writer()
 	return cmd
 }
 
@@ -310,7 +312,7 @@ func (env environment) runCommand(ctx context.Context, cmd *exec.Cmd) error {
 	if ok {
 		timeout = time.Until(deadline)
 	}
-	log.Printf("[INFO] exec (timeout=%s): %+v ", timeout, cmd)
+	env.logger.Printf("[INFO] exec (timeout=%s): %+v ", timeout, cmd)
 
 	// start the command; if it fails to start, report error immediately
 	err := cmd.Start()

@@ -53,7 +53,14 @@ type Builder struct {
 		Dir  string `json:"dir,omitempty"`
 		Name string `json:"name,omitempty"`
 	} `json:"embed_dir,omitempty"`
+
+	logger *log.Logger
 }
+
+// LoggerKeyType is the key for the logger in the context.
+type LoggerKeyType struct{}
+
+var loggerKey = LoggerKeyType{}
 
 // Build builds Caddy at the configured version with the
 // configured plugins and plops down a binary at outputFile.
@@ -66,6 +73,16 @@ func (b Builder) Build(ctx context.Context, outputFile string) error {
 	if outputFile == "" {
 		return fmt.Errorf("output file path is required")
 	}
+
+	// If the context has a logger specified, then use it
+	// We don't use log.SetOutput() because we don't want to
+	// hijack logs for everyone.
+	if logger, ok := ctx.Value(loggerKey).(*log.Logger); ok {
+		b.logger = logger
+	} else {
+		b.logger = log.Default()
+	}
+
 	// the user's specified output file might be relative, and
 	// because the `go build` command is executed in a different,
 	// temporary folder, we convert the user's input to an
@@ -74,7 +91,7 @@ func (b Builder) Build(ctx context.Context, outputFile string) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("[INFO] absolute output file path: %s", absOutputFile)
+	b.logger.Printf("[INFO] absolute output file path: %s", absOutputFile)
 
 	// set some defaults from the environment, if applicable
 	if b.OS == "" {
@@ -123,7 +140,7 @@ func (b Builder) Build(ctx context.Context, outputFile string) error {
 	}
 
 	if b.SkipBuild {
-		log.Printf("[INFO] Skipping build as requested")
+		b.logger.Printf("[INFO] Skipping build as requested")
 
 		return nil
 	}
@@ -136,12 +153,12 @@ func (b Builder) Build(ctx context.Context, outputFile string) error {
 	env = setEnv(env, "GOARCH="+b.Arch)
 	env = setEnv(env, "GOARM="+b.ARM)
 	if b.RaceDetector && !b.Compile.Cgo {
-		log.Println("[WARNING] Enabling cgo because it is required by the race detector")
+		b.logger.Println("[WARNING] Enabling cgo because it is required by the race detector")
 		b.Compile.Cgo = true
 	}
 	env = setEnv(env, fmt.Sprintf("CGO_ENABLED=%s", b.Compile.CgoEnabled()))
 
-	log.Println("[INFO] Building Caddy")
+	b.logger.Println("[INFO] Building Caddy")
 
 	// tidy the module to ensure go.mod and go.sum are consistent with the module prereq
 	tidyCmd := buildEnv.newGoModCommand(ctx, "tidy", "-e")
@@ -178,7 +195,7 @@ func (b Builder) Build(ctx context.Context, outputFile string) error {
 		return err
 	}
 
-	log.Printf("[INFO] Build complete: %s", outputFile)
+	b.logger.Printf("[INFO] Build complete: %s", outputFile)
 
 	return nil
 }
